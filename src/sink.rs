@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(feature = "crossbeam-channel")]
@@ -58,8 +58,7 @@ impl SeekOrder {
 }
 
 struct Controls {
-    pause: Mutex<bool>,
-    pause_wakeup: Condvar,
+    pause: AtomicBool,
     volume: Mutex<f32>,
     stopped: AtomicBool,
     speed: Mutex<f32>,
@@ -85,8 +84,7 @@ impl Sink {
             queue_tx,
             sleep_until_end: Mutex::new(None),
             controls: Arc::new(Controls {
-                pause: Mutex::new(false),
-                pause_wakeup: Condvar::new(),
+                pause: AtomicBool::new(false),
                 volume: Mutex::new(1.0),
                 stopped: AtomicBool::new(false),
                 speed: Mutex::new(1.0),
@@ -139,7 +137,8 @@ impl Sink {
                 }
                 let amp = src.inner_mut().inner_mut();
                 amp.set_factor(*controls.volume.lock().unwrap());
-                amp.inner_mut().set_paused(*controls.pause.lock().unwrap());
+                amp.inner_mut()
+                    .set_paused(controls.pause.load(Ordering::SeqCst));
                 amp.inner_mut()
                     .inner_mut()
                     .set_factor(*controls.speed.lock().unwrap());
@@ -147,12 +146,6 @@ impl Sink {
                     seek.attempt(amp)
                 }
                 start_played.store(true, Ordering::SeqCst);
-
-                // If paused, sleep until unpaused.
-                let mut pause = controls.pause.lock().unwrap();
-                while *pause {
-                    pause = controls.pause_wakeup.wait(pause).unwrap();
-                }
             })
             .convert_samples();
         self.sound_count.fetch_add(1, Ordering::Relaxed);
@@ -196,20 +189,12 @@ impl Sink {
         *self.controls.speed.lock().unwrap() = value;
     }
 
-    /// Toggle playback of a sink.
-    #[inline]
-    pub fn toggle(&self) {
-        *self.controls.pause.lock().unwrap() ^= true;
-        self.controls.pause_wakeup.notify_all();
-    }
-
     /// Resumes playback of a paused sink.
     ///
     /// No effect if not paused.
     #[inline]
     pub fn play(&self) {
-        *self.controls.pause.lock().unwrap() = false;
-        self.controls.pause_wakeup.notify_all();
+        self.controls.pause.store(false, Ordering::SeqCst);
     }
 
     // There is no `can_seek()` method as it is impossible to use correctly. Between
@@ -252,8 +237,7 @@ impl Sink {
     ///
     /// A paused sink can be resumed with `play()`.
     pub fn pause(&self) {
-        *self.controls.pause.lock().unwrap() = true;
-        self.controls.pause_wakeup.notify_all();
+        self.controls.pause.store(true, Ordering::SeqCst);
     }
 
     /// Gets if a sink is paused
@@ -261,7 +245,7 @@ impl Sink {
     /// Sinks can be paused and resumed using `pause()` and `play()`. This returns `true` if the
     /// sink is paused.
     pub fn is_paused(&self) -> bool {
-        *self.controls.pause.lock().unwrap()
+        self.controls.pause.load(Ordering::SeqCst)
     }
 
     /// Removes all currently loaded `Source`s from the `Sink`, and pauses it.
