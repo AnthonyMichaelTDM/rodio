@@ -347,7 +347,7 @@ mod tests {
 
         // Low rate to ensure immediate control.
         sink.append(SamplesBuffer::new(1, 1, v.clone()));
-        let mut src = SamplesBuffer::new(1, 1, v).convert_samples();
+        let mut src = SamplesBuffer::new(1, 1, v.clone()).convert_samples();
 
         assert_eq!(queue_rx.next(), src.next());
         assert_eq!(queue_rx.next(), src.next());

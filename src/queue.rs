@@ -45,6 +45,7 @@ where
 
 /// The input of the queue.
 pub struct SourcesQueueInput<S> {
+    #[allow(clippy::type_complexity)]
     next_sounds: Mutex<Vec<(Box<dyn Source<Item = S> + Send>, Option<Sender<()>>)>>,
 
     // See constructor.
