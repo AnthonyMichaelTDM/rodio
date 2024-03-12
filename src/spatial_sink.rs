@@ -163,8 +163,8 @@ impl SpatialSink {
 
     /// Returns true if this sink has no more sounds to play.
     #[inline]
-    pub fn empty(&self) -> bool {
-        self.sink.empty()
+    pub fn is_empty(&self) -> bool {
+        self.sink.is_empty()
     }
 
     /// Returns the number of sounds currently in the queue.

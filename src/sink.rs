@@ -309,7 +309,7 @@ impl Sink {
 
     /// Returns true if this sink has no more sounds to play.
     #[inline]
-    pub fn empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
@@ -365,7 +365,7 @@ mod tests {
 
         assert_eq!(queue_rx.next(), Some(0.0));
 
-        assert_eq!(sink.empty(), true);
+        assert_eq!(sink.is_empty(), true);
     }
 
     #[test]
