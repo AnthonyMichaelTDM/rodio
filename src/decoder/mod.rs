@@ -7,10 +7,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::marker::Sync;
 use std::mem;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::source::SeekError;
-use crate::Source;
+use crate::{Sample, Source};
 
 #[cfg(feature = "symphonia")]
 use self::read_seek_source::ReadSeekSource;
@@ -33,13 +35,22 @@ mod wav;
 /// Source of audio samples from decoding a file.
 ///
 /// Supports MP3, WAV, Vorbis and Flac.
-pub struct Decoder<R>(DecoderImpl<R>)
+pub struct Decoder<R>
 where
-    R: Read + Seek;
+    R: Read + Seek,
+{
+    decoder: DecoderImpl<R>,
+    info: Arc<DecoderInfo>,
+}
 
-pub struct LoopedDecoder<R>(DecoderImpl<R>)
+pub struct LoopedDecoder<R>
 where
-    R: Read + Seek;
+    R: Read + Seek,
+{
+    decoder: DecoderImpl<R>,
+    #[allow(dead_code)]
+    info: Arc<DecoderInfo>,
+}
 
 enum DecoderImpl<R>
 where
@@ -55,7 +66,50 @@ where
     Mp3(mp3::Mp3Decoder<R>),
     #[cfg(feature = "symphonia")]
     Symphonia(symphonia::SymphoniaDecoder),
-    None(::std::marker::PhantomData<R>),
+    None(std::marker::PhantomData<R>),
+}
+
+pub struct DecoderInfo {
+    channels: u16,
+    sample_rate: u32,
+    samples_elapsed: AtomicUsize,
+}
+
+impl DecoderInfo {
+    fn from_source<S>(source: &S) -> Self
+    where
+        S: Source,
+        S::Item: Sample,
+    {
+        Self {
+            channels: source.channels(),
+            sample_rate: source.sample_rate(),
+            samples_elapsed: AtomicUsize::default(),
+        }
+    }
+
+    #[inline]
+    pub fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    #[inline]
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    #[inline]
+    pub fn elapsed_samples(&self) -> usize {
+        self.samples_elapsed.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn elapsed_duration(&self) -> Option<Duration> {
+        Duration::try_from_secs_f64(
+            self.elapsed_samples() as f64 / self.sample_rate() as f64 / self.channels() as f64,
+        )
+        .ok()
+    }
 }
 
 impl<R: Read + Seek> DecoderImpl<R> {
@@ -194,7 +248,11 @@ where
         let data = match wav::WavDecoder::new(data) {
             Err(data) => data,
             Ok(decoder) => {
-                return Ok(Decoder(DecoderImpl::Wav(decoder)));
+                let info = Arc::new(DecoderInfo::from_source(&decoder));
+                return Ok(Decoder {
+                    decoder: DecoderImpl::Wav(decoder),
+                    info,
+                });
             }
         };
 
@@ -202,7 +260,11 @@ where
         let data = match flac::FlacDecoder::new(data) {
             Err(data) => data,
             Ok(decoder) => {
-                return Ok(Decoder(DecoderImpl::Flac(decoder)));
+                let info = Arc::new(DecoderInfo::from_source(&decoder));
+                return Ok(Decoder {
+                    decoder: DecoderImpl::Flac(decoder),
+                    info,
+                });
             }
         };
 
@@ -210,7 +272,11 @@ where
         let data = match vorbis::VorbisDecoder::new(data) {
             Err(data) => data,
             Ok(decoder) => {
-                return Ok(Decoder(DecoderImpl::Vorbis(decoder)));
+                let info = Arc::new(DecoderInfo::from_source(&decoder));
+                return Ok(Decoder {
+                    decoder: DecoderImpl::Vorbis(decoder),
+                    info,
+                });
             }
         };
 
@@ -218,7 +284,10 @@ where
         let data = match mp3::Mp3Decoder::new(data) {
             Err(data) => data,
             Ok(decoder) => {
-                return Ok(Decoder(DecoderImpl::Mp3(decoder)));
+                return Ok(Decoder {
+                    decoder: DecoderImpl::Mp3(decoder),
+                    info: Arc::new(DecoderInfo::from_source(&decoder)),
+                });
             }
         };
 
@@ -231,7 +300,13 @@ where
 
             match symphonia::SymphoniaDecoder::new(mss, None) {
                 Err(e) => Err(e),
-                Ok(decoder) => Ok(Decoder(DecoderImpl::Symphonia(decoder))),
+                Ok(decoder) => {
+                    let info = Arc::new(DecoderInfo::from_source(&decoder));
+                    Ok(Decoder {
+                        decoder: DecoderImpl::Symphonia(decoder),
+                        info,
+                    })
+                }
             }
         }
         #[cfg(not(feature = "symphonia"))]
@@ -246,7 +321,13 @@ where
     pub fn new_wav(data: R) -> Result<Decoder<R>, DecoderError> {
         match wav::WavDecoder::new(data) {
             Err(_) => Err(DecoderError::UnrecognizedFormat),
-            Ok(decoder) => Ok(Decoder(DecoderImpl::Wav(decoder))),
+            Ok(decoder) => {
+                let info = Arc::new(DecoderInfo::from_source(&decoder));
+                Ok(Decoder {
+                    decoder: DecoderImpl::Wav(decoder),
+                    info,
+                })
+            }
         }
     }
 
@@ -261,7 +342,13 @@ where
     pub fn new_flac(data: R) -> Result<Decoder<R>, DecoderError> {
         match flac::FlacDecoder::new(data) {
             Err(_) => Err(DecoderError::UnrecognizedFormat),
-            Ok(decoder) => Ok(Decoder(DecoderImpl::Flac(decoder))),
+            Ok(decoder) => {
+                let info = Arc::new(DecoderInfo::from_source(&decoder));
+                Ok(Decoder {
+                    decoder: DecoderImpl::Flac(decoder),
+                    info,
+                })
+            }
         }
     }
 
@@ -276,8 +363,20 @@ where
     pub fn new_vorbis(data: R) -> Result<Decoder<R>, DecoderError> {
         match vorbis::VorbisDecoder::new(data) {
             Err(_) => Err(DecoderError::UnrecognizedFormat),
-            Ok(decoder) => Ok(Decoder(DecoderImpl::Vorbis(decoder))),
+            Ok(decoder) => {
+                let info = Arc::new(DecoderInfo::from_source(&decoder));
+                Ok(Decoder {
+                    decoder: DecoderImpl::Vorbis(decoder),
+                    info,
+                })
+            }
         }
+    }
+
+    /// Builds a new decoder from vorbis data.
+    #[cfg(feature = "symphonia-vorbis")]
+    pub fn new_vorbis(data: R) -> Result<Decoder<R>, DecoderError> {
+        Decoder::new_symphonia(data, "ogg")
     }
 
     /// Builds a new decoder from vorbis data.
@@ -291,7 +390,10 @@ where
     pub fn new_mp3(data: R) -> Result<Decoder<R>, DecoderError> {
         match mp3::Mp3Decoder::new(data) {
             Err(_) => Err(DecoderError::UnrecognizedFormat),
-            Ok(decoder) => Ok(Decoder(DecoderImpl::Mp3(decoder))),
+            Ok(decoder) => Ok(Decoder {
+                decoder: DecoderImpl::Mp3(decoder),
+                info: Arc::new(DecoderInfo::from_source(&decoder)),
+            }),
         }
     }
 
@@ -322,8 +424,18 @@ where
 
         match symphonia::SymphoniaDecoder::new(mss, Some(hint)) {
             Err(e) => Err(e),
-            Ok(decoder) => Ok(Decoder(DecoderImpl::Symphonia(decoder))),
+            Ok(decoder) => {
+                let info = Arc::new(DecoderInfo::from_source(&decoder));
+                Ok(Decoder {
+                    decoder: DecoderImpl::Symphonia(decoder),
+                    info,
+                })
+            }
         }
+    }
+
+    pub fn get_info(&self) -> Arc<DecoderInfo> {
+        self.info.clone()
     }
 }
 
@@ -375,7 +487,10 @@ where
     R: Read + Seek,
 {
     fn new(decoder: Decoder<R>) -> LoopedDecoder<R> {
-        Self(decoder.0)
+        Self {
+            decoder: decoder.decoder,
+            info: decoder.info,
+        }
     }
 }
 
@@ -387,12 +502,17 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<i16> {
-        self.0.next()
+        if let Some(sample) = self.decoder.next() {
+            self.info.samples_elapsed.fetch_add(1, Ordering::Relaxed);
+            Some(sample)
+        } else {
+            None
+        }
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
+        self.decoder.size_hint()
     }
 }
 
@@ -402,26 +522,26 @@ where
 {
     #[inline]
     fn current_frame_len(&self) -> Option<usize> {
-        self.0.current_frame_len()
+        self.decoder.current_frame_len()
     }
 
     #[inline]
     fn channels(&self) -> u16 {
-        self.0.channels()
+        self.decoder.channels()
     }
 
     fn sample_rate(&self) -> u32 {
-        self.0.sample_rate()
+        self.decoder.sample_rate()
     }
 
     #[inline]
     fn total_duration(&self) -> Option<Duration> {
-        self.0.total_duration()
+        self.decoder.total_duration()
     }
 
     #[inline]
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
-        self.0.try_seek(pos)
+        self.decoder.try_seek(pos)
     }
 }
 
@@ -433,10 +553,10 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<i16> {
-        if let Some(sample) = self.0.next() {
+        if let Some(sample) = self.decoder.next() {
             Some(sample)
         } else {
-            let decoder = mem::replace(&mut self.0, DecoderImpl::None(Default::default()));
+            let decoder = mem::replace(&mut self.decoder, DecoderImpl::None(Default::default()));
             let (decoder, sample) = match decoder {
                 #[cfg(all(feature = "wav", not(feature = "symphonia-wav")))]
                 DecoderImpl::Wav(source) => {
@@ -483,14 +603,14 @@ where
                 }
                 none @ DecoderImpl::None(_) => (none, None),
             };
-            self.0 = decoder;
+            self.decoder = decoder;
             sample
         }
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
+        self.decoder.size_hint()
     }
 }
 
@@ -500,17 +620,17 @@ where
 {
     #[inline]
     fn current_frame_len(&self) -> Option<usize> {
-        self.0.current_frame_len()
+        self.decoder.current_frame_len()
     }
 
     #[inline]
     fn channels(&self) -> u16 {
-        self.0.channels()
+        self.decoder.channels()
     }
 
     #[inline]
     fn sample_rate(&self) -> u32 {
-        self.0.sample_rate()
+        self.decoder.sample_rate()
     }
 
     #[inline]
@@ -519,7 +639,7 @@ where
     }
 
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
-        self.0.try_seek(pos)
+        self.decoder.try_seek(pos)
     }
 }
 
