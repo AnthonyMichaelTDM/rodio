@@ -59,7 +59,7 @@ where
     #[cfg(all(feature = "wav", not(feature = "symphonia-wav")))]
     Wav(wav::WavDecoder<R>),
     #[cfg(all(feature = "vorbis", not(feature = "symphonia-vorbis")))]
-    Vorbis(vorbis::VorbisDecoder<R>),
+    Vorbis(Box<vorbis::VorbisDecoder<R>>),
     #[cfg(all(feature = "flac", not(feature = "symphonia-flac")))]
     Flac(flac::FlacDecoder<R>),
     #[cfg(all(feature = "minimp3", not(feature = "symphonia-mp3")))]
@@ -274,7 +274,7 @@ where
             Ok(decoder) => {
                 let info = Arc::new(DecoderInfo::from_source(&decoder));
                 return Ok(Decoder {
-                    decoder: DecoderImpl::Vorbis(decoder),
+                    decoder: DecoderImpl::Vorbis(Box::new(decoder)),
                     info,
                 });
             }
@@ -366,7 +366,7 @@ where
             Ok(decoder) => {
                 let info = Arc::new(DecoderInfo::from_source(&decoder));
                 Ok(Decoder {
-                    decoder: DecoderImpl::Vorbis(decoder),
+                    decoder: DecoderImpl::Vorbis(Box::new(decoder)),
                     info,
                 })
             }
@@ -575,7 +575,7 @@ where
                         OggStreamReader::from_ogg_reader(reader).ok()?,
                     );
                     let sample = source.next();
-                    (DecoderImpl::Vorbis(source), sample)
+                    (DecoderImpl::Vorbis(Box::new(source)), sample)
                 }
                 #[cfg(all(feature = "flac", not(feature = "symphonia-flac")))]
                 DecoderImpl::Flac(source) => {
