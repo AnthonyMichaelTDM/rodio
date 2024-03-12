@@ -1,3 +1,10 @@
+This fork is a patched version of [rodio](https://github.com/RustAudio/rodio) that includes the following PRs, and some additional fixes to get them working together and whatnot
+- [#513](https://github.com/RustAudio/rodio/pull/513)
+- [#510](https://github.com/RustAudio/rodio/pull/510)
+- [#502](https://github.com/RustAudio/rodio/pull/502)
+
+the fork will be deleted when it's purpose is exhausted (when those PR's are merged to rodio)
+
 # Audio playback library
 
 [![Crates.io Version](https://img.shields.io/crates/v/rodio.svg)](https://crates.io/crates/rodio)
